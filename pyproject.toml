@@ -1,0 +1,6 @@
+[project]
+name = "twitch_notify"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.12"
