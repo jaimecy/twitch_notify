@@ -6,9 +6,9 @@ import time
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TELEGRAM_TOKEN = os.getenv("8196163951:AAEgMDURdYS3cQDM9mu8Gdzp6gL7vdl0MFg")
-TWITCH_CLIENT_ID = os.getenv("tmm98rywp6vdwles6gtlbbe4iit5sv")
-TWITCH_CLIENT_SECRET = os.getenv("q18ju74j3d5lqsrnn29okk1pwyh87q")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 
 DATA_FILE = "data.json"
 CHECK_INTERVAL = 60  # segundos
@@ -57,7 +57,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         data[user_id].append(channel)
         save_data(data)
-        await update.message.reply_text(f"✅ Canal **{channel}** añadido.")
+        await update.message.reply_text(f"✅ Canal **{channel}** añadido.", parse_mode="Markdown")
 
 async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
@@ -69,7 +69,7 @@ async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in data and channel in data[user_id]:
         data[user_id].remove(channel)
         save_data(data)
-        await update.message.reply_text(f"🗑 Canal **{channel}** eliminado.")
+        await update.message.reply_text(f"🗑 Canal **{channel}** eliminado.", parse_mode="Markdown")
     else:
         await update.message.reply_text("⚠️ No estás siguiendo ese canal.")
 
@@ -78,12 +78,11 @@ async def list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     channels = data.get(user_id, [])
     if channels:
-        text = "📺 Canales que estás siguiendo:"
-text = "\n".join(f"* - {c}" for c in channels)
+        text = "📺 Canales que estás siguiendo:\n"
+        text += "\n".join(f"* - {c}" for c in channels)
     else:
-        text = "❗ No estás siguiendo ningún canal.
-Usa /add canal para empezar."
-    await update.message.reply_text(text)
+        text = "❗ No estás siguiendo ningún canal.\nUsa /add canal para empezar."
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 def check_streams():
     bot = Bot(token=TELEGRAM_TOKEN)
@@ -101,9 +100,7 @@ def check_streams():
             if is_live and not was_live:
                 title = info["title"]
                 url = f"https://twitch.tv/{channel}"
-                text = f"🔴 **{channel}** ha comenzado directo:
-📌 *{title}*
-👉 {url}"
+                text = f"🔴 **{channel}** ha comenzado directo:\n📌 *{title}*\n👉 {url}"
                 for uid in user_ids:
                     try:
                         bot.send_message(chat_id=uid, text=text, parse_mode="Markdown")
