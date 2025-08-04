@@ -78,7 +78,7 @@ async def list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     channels = data.get(user_id, [])
     if channels:
-        text = "📺 Canales que estás siguiendo:
+        text = "📺 Canales que estás siguiendo:"
 " + "\n".join(f"- {c}" for c in channels)
     else:
         text = "❗ No estás siguiendo ningún canal.
