@@ -1,126 +1,163 @@
 import os
 import json
-import requests
-import threading
-import time
-from telegram import Update, Bot
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import logging
+import asyncio
+import httpx
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
 
-TELEGRAM_TOKEN = os.getenv("8196163951:AAEgMDURdYS3cQDM9mu8Gdzp6gL7vdl0MFg")
-TWITCH_CLIENT_ID = os.getenv("tmm98rywp6vdwles6gtlbbe4iit5sv")
-TWITCH_CLIENT_SECRET = os.getenv("q18ju74j3d5lqsrnn29okk1pwyh87q")
+# Configura el log
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 DATA_FILE = "data.json"
 CHECK_INTERVAL = 60  # segundos
-STREAM_STATUS = {}
 
+# Carga datos desde el archivo JSON
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
+# Guarda datos en el archivo JSON
 def save_data(data):
     with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(data, f, indent=2)
 
-def get_twitch_token():
-    url = "https://id.twitch.tv/oauth2/token"
-    params = {
-        "client_id": TWITCH_CLIENT_ID,
-        "client_secret": TWITCH_CLIENT_SECRET,
-        "grant_type": "client_credentials"
-    }
-    r = requests.post(url, params=params)
-    return r.json().get("access_token", "")
-
-def get_stream_info(channel, token):
+# Llama a la API de Twitch para obtener información del stream
+async def get_stream_data(session, client_id, token, channel):
     headers = {
-        "Client-ID": TWITCH_CLIENT_ID,
+        "Client-ID": client_id,
         "Authorization": f"Bearer {token}"
     }
     url = f"https://api.twitch.tv/helix/streams?user_login={channel}"
-    r = requests.get(url, headers=headers)
-    data = r.json().get("data", [])
-    return data[0] if data else None
+    try:
+        response = await session.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if data["data"]:
+            return data["data"][0]
+    except Exception as e:
+        logging.error(f"Error consultando canal {channel}: {e}")
+    return None
 
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Comando /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Bienvenido. Usa /add [canal] para añadir un canal de Twitch.\n"
+        "Usa /list para ver tus canales.\n"
+        "Usa /remove [canal] para eliminar uno.\n"
+        "Ejemplo: /add auronplay"
+    )
+
+# Comando /add canal
+async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("❌ Usa /add nombre_canal")
+        return
+
+    channel = context.args[0].lower()
     user_id = str(update.effective_chat.id)
     data = load_data()
-    channel = context.args[0].lower() if context.args else None
-    if not channel:
-        await update.message.reply_text("❌ Especifica un canal: /add canal")
-        return
-    data.setdefault(user_id, [])
-    if channel in data[user_id]:
-        await update.message.reply_text("⚠️ Ya estás siguiendo ese canal.")
-    else:
+    if user_id not in data:
+        data[user_id] = []
+
+    if channel not in data[user_id]:
         data[user_id].append(channel)
         save_data(data)
-        await update.message.reply_text(f"✅ Canal **{channel}** añadido.")
+        await update.message.reply_text(f"✅ Canal añadido: {channel}")
+    else:
+        await update.message.reply_text("⚠️ Ya estás siguiendo ese canal.")
 
-async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Comando /remove canal
+async def remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("❌ Usa /remove nombre_canal")
+        return
+
+    channel = context.args[0].lower()
     user_id = str(update.effective_chat.id)
     data = load_data()
-    channel = context.args[0].lower() if context.args else None
-    if not channel:
-        await update.message.reply_text("❌ Especifica un canal: /remove canal")
-        return
+
     if user_id in data and channel in data[user_id]:
         data[user_id].remove(channel)
         save_data(data)
-        await update.message.reply_text(f"🗑 Canal **{channel}** eliminado.")
+        await update.message.reply_text(f"🗑️ Canal eliminado: {channel}")
     else:
         await update.message.reply_text("⚠️ No estás siguiendo ese canal.")
 
+# Comando /list
 async def list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
     data = load_data()
     channels = data.get(user_id, [])
     if channels:
-        text = "📺 Canales que estás siguiendo:"
-text = "\n".join(f"* - {c}" for c in channels)
+        text = "📺 Canales que estás siguiendo:\n" + "\n".join(f"* - {c}" for c in channels)
     else:
-        text = "❗ No estás siguiendo ningún canal.
-Usa /add canal para empezar."
+        text = "❗ No estás siguiendo ningún canal.\nUsa /add canal para empezar."
     await update.message.reply_text(text)
 
-def check_streams():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    access_token = get_twitch_token()
-    while True:
-        data = load_data()
-        user_map = {}
-        for user_id, channels in data.items():
-            for channel in channels:
-                user_map.setdefault(channel, []).append(user_id)
-        for channel, user_ids in user_map.items():
-            info = get_stream_info(channel, access_token)
-            was_live = STREAM_STATUS.get(channel, False)
-            is_live = info is not None
-            if is_live and not was_live:
-                title = info["title"]
-                url = f"https://twitch.tv/{channel}"
-                text = f"🔴 **{channel}** ha comenzado directo:
-📌 *{title}*
-👉 {url}"
-                for uid in user_ids:
-                    try:
-                        bot.send_message(chat_id=uid, text=text, parse_mode="Markdown")
-                    except Exception as e:
-                        print(f"Error enviando a {uid}: {e}")
-            STREAM_STATUS[channel] = is_live
-        time.sleep(CHECK_INTERVAL)
+# Verifica si hay directos nuevos
+async def check_streams(app):
+    data = load_data()
+    live_status = {}
 
-def main():
-    thread = threading.Thread(target=check_streams, daemon=True)
-    thread.start()
+    twitch_id = os.getenv("TWITCH_CLIENT_ID")
+    twitch_secret = os.getenv("TWITCH_CLIENT_SECRET")
+
+    async with httpx.AsyncClient() as client:
+        auth_resp = await client.post(
+            f"https://id.twitch.tv/oauth2/token",
+            params={
+                "client_id": twitch_id,
+                "client_secret": twitch_secret,
+                "grant_type": "client_credentials",
+            },
+            timeout=10,
+        )
+        access_token = auth_resp.json().get("access_token")
+        if not access_token:
+            logging.error("No se pudo obtener el token de acceso.")
+            return
+
+        while True:
+            for user_id, channels in data.items():
+                for channel in channels:
+                    stream = await get_stream_data(client, twitch_id, access_token, channel)
+                    key = f"{user_id}:{channel}"
+                    if stream and not live_status.get(key):
+                        live_status[key] = True
+                        title = stream["title"]
+                        await app.bot.send_message(
+                            chat_id=int(user_id),
+                            text=f"🔴 ¡{channel} está en directo!\n🎮 {title}\nhttps://twitch.tv/{channel}"
+                        )
+                    elif not stream:
+                        live_status[key] = False
+            await asyncio.sleep(CHECK_INTERVAL)
+
+# Función principal
+async def main():
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("remove", remove))
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add_channel))
+    app.add_handler(CommandHandler("remove", remove_channel))
     app.add_handler(CommandHandler("list", list_channels))
-    app.run_polling()
+
+    # Inicia la verificación de streams en segundo plano
+    asyncio.create_task(check_streams(app))
+
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
